@@ -1,0 +1,96 @@
+{
+  "name": "LendLoop — request notification",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LendLoop setup\nSet container env `LENDLOOP_WEBHOOK_SECRET` and `CONVEX_SITE_URL`.\nDo not paste the secret into this workflow.\nAfter importing the error workflow, open this workflow's Settings and choose it as the Error Workflow, then activate.",
+        "height": 220,
+        "width": 360,
+        "color": 4
+      },
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Setup note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-request",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "11111111-1111-4111-8111-111111111112",
+      "name": "Request webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        80
+      ],
+      "webhookId": "lendloop-request"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function canonicalJson(value) {\n  return JSON.stringify(sortValue(value));\n}\n\nfunction sortValue(value) {\n  if (value === null || typeof value !== \"object\") return value;\n  if (Array.isArray(value)) return value.map((item) => sortValue(item));\n  const sorted = {};\n  for (const key of Object.keys(value).sort()) {\n    if (value[key] !== undefined) sorted[key] = sortValue(value[key]);\n  }\n  return sorted;\n}\n\nfunction signPayload(secret, timestamp, body) {\n  const crypto = require(\"crypto\");\n  return crypto.createHmac(\"sha256\", secret).update(`${timestamp}.${body}`).digest(\"hex\");\n}\n\nfunction requireSecret() {\n  const secret = $env.LENDLOOP_WEBHOOK_SECRET;\n  if (!secret) throw new Error(\"LENDLOOP_WEBHOOK_SECRET is not set\");\n  return secret;\n}\n\nconst secret = requireSecret();\nconst item = $input.first().json;\nconst headers = item.headers ?? {};\nconst payload = item.body && typeof item.body === \"object\" ? item.body : item;\nconst timestamp = String(headers[\"x-lendloop-timestamp\"] ?? headers[\"X-LendLoop-Timestamp\"] ?? \"\");\nconst signature = String(headers[\"x-lendloop-signature\"] ?? headers[\"X-LendLoop-Signature\"] ?? \"\").toLowerCase();\nif (!timestamp || !signature) throw new Error(\"Missing HMAC headers\");\nconst body = canonicalJson(payload);\nconst expected = signPayload(secret, timestamp, body);\nconst skew = Math.abs(Date.now() - Number(timestamp));\nif (!Number.isFinite(Number(timestamp)) || skew > 5 * 60 * 1000) {\n  throw new Error(\"Invalid HMAC signature\");\n}\nif (expected.length !== signature.length) throw new Error(\"Invalid HMAC signature\");\nlet diff = 0;\nfor (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);\nif (diff !== 0) throw new Error(\"Invalid HMAC signature\");\nconst fields = [\"event\", \"loanId\", \"status\", \"toolName\", \"category\", \"startDate\", \"endDate\", \"recipientRole\", \"recipientEmail\"];\nconst minimized = {};\nfor (const key of fields) minimized[key] = payload[key];\nconst notification = \"[LendLoop] \" + minimized.status + \" · \" + minimized.toolName + \" · \" + minimized.startDate + \" to \" + minimized.endDate + \" → \" + minimized.recipientRole + \" \" + minimized.recipientEmail;\nreturn [{ json: { ok: true, notification, minimized } }];\n"
+      },
+      "id": "11111111-1111-4111-8111-111111111113",
+      "name": "Verify and log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {}
+      },
+      "id": "11111111-1111-4111-8111-111111111114",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Request webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify and log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify and log": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

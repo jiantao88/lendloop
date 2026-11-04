@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+dist
+coverage
+.vercel
+.env
+.env.local
+.env.*.local
+.convex
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+npm-debug.log*

@@ -1,0 +1,117 @@
+{
+  "name": "LendLoop — error workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Error workflow\nImport this first. In the other two LendLoop workflows, set Settings → Error Workflow to this workflow so failed runs stay visible.\nThe secret stays in the n8n environment.",
+        "height": 220,
+        "width": 360,
+        "color": 4
+      },
+      "id": "33333333-3333-4333-8333-333333333331",
+      "name": "Setup note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -180
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "33333333-3333-4333-8333-333333333332",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function canonicalJson(value) {\n  return JSON.stringify(sortValue(value));\n}\n\nfunction sortValue(value) {\n  if (value === null || typeof value !== \"object\") return value;\n  if (Array.isArray(value)) return value.map((item) => sortValue(item));\n  const sorted = {};\n  for (const key of Object.keys(value).sort()) {\n    if (value[key] !== undefined) sorted[key] = sortValue(value[key]);\n  }\n  return sorted;\n}\n\nfunction signPayload(secret, timestamp, body) {\n  const crypto = require(\"crypto\");\n  return crypto.createHmac(\"sha256\", secret).update(`${timestamp}.${body}`).digest(\"hex\");\n}\n\nfunction requireSecret() {\n  const secret = $env.LENDLOOP_WEBHOOK_SECRET;\n  if (!secret) throw new Error(\"LENDLOOP_WEBHOOK_SECRET is not set\");\n  return secret;\n}\n\nconst secret = requireSecret();\nconst raw = $input.first().json;\nconst executionId = String(raw.execution?.id ?? Date.now());\nconst workflowName = String(raw.workflow?.name ?? \"workflow\");\nlet message = String(raw.execution?.error?.message ?? \"Workflow failed\");\nmessage = message.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi, \"[redacted]\").replace(/\\s+/g, \" \").trim().slice(0, 300);\nconst payload = {\n  kind: \"workflow_error\",\n  idempotencyKey: \"error:\" + executionId.replace(/[^A-Za-z0-9_.:-]/g, \"\").slice(0, 80),\n  summary: (workflowName + \": \" + (message || \"Workflow failed\")).slice(0, 300),\n};\nconst body = canonicalJson(payload);\nconst timestamp = Date.now().toString();\nreturn [{ json: { body, timestamp, signature: signPayload(secret, timestamp, body) } }];\n"
+      },
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "Minimize and sign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL.replace(/\\/$/, '') + '/n8n/errors' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "33333333-3333-4333-8333-333333333334",
+      "name": "Record the failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "stopWorkflow"
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Minimize and sign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Minimize and sign": {
+      "main": [
+        [
+          {
+            "node": "Record the failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,232 @@
+{
+  "name": "LendLoop — overdue reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LendLoop setup\nSet container env `LENDLOOP_WEBHOOK_SECRET` and `CONVEX_SITE_URL`.\nDo not paste the secret into this workflow.\nAfter importing the error workflow, open this workflow's Settings and choose it as the Error Workflow, then activate.",
+        "height": 220,
+        "width": 360,
+        "color": 4
+      },
+      "id": "22222222-2222-4222-8222-222222222221",
+      "name": "Setup note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Daily at 09:00 UTC",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function canonicalJson(value) {\n  return JSON.stringify(sortValue(value));\n}\n\nfunction sortValue(value) {\n  if (value === null || typeof value !== \"object\") return value;\n  if (Array.isArray(value)) return value.map((item) => sortValue(item));\n  const sorted = {};\n  for (const key of Object.keys(value).sort()) {\n    if (value[key] !== undefined) sorted[key] = sortValue(value[key]);\n  }\n  return sorted;\n}\n\nfunction signPayload(secret, timestamp, body) {\n  const crypto = require(\"crypto\");\n  return crypto.createHmac(\"sha256\", secret).update(`${timestamp}.${body}`).digest(\"hex\");\n}\n\nfunction requireSecret() {\n  const secret = $env.LENDLOOP_WEBHOOK_SECRET;\n  if (!secret) throw new Error(\"LENDLOOP_WEBHOOK_SECRET is not set\");\n  return secret;\n}\n\nconst secret = requireSecret();\nconst asOf = new Date().toISOString().slice(0, 10);\nconst body = canonicalJson({ asOf });\nconst timestamp = Date.now().toString();\nreturn [{ json: { body, timestamp, signature: signPayload(secret, timestamp, body), asOf } }];\n"
+      },
+      "id": "22222222-2222-4222-8222-222222222223",
+      "name": "Sign overdue query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL.replace(/\\/$/, '') + '/n8n/overdue' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "22222222-2222-4222-8222-222222222224",
+      "name": "Fetch overdue loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "stopWorkflow"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const response = $input.first().json;\nconst loans = Array.isArray(response.loans) ? response.loans : [];\nreturn loans.map((loan) => ({\n  json: {\n    ...loan,\n    notification: \"[LendLoop] overdue · \" + loan.toolName + \" · due \" + loan.endDate + \" → borrower \" + loan.borrowerEmail,\n  },\n}));\n"
+      },
+      "id": "22222222-2222-4222-8222-222222222225",
+      "name": "One item per loan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function canonicalJson(value) {\n  return JSON.stringify(sortValue(value));\n}\n\nfunction sortValue(value) {\n  if (value === null || typeof value !== \"object\") return value;\n  if (Array.isArray(value)) return value.map((item) => sortValue(item));\n  const sorted = {};\n  for (const key of Object.keys(value).sort()) {\n    if (value[key] !== undefined) sorted[key] = sortValue(value[key]);\n  }\n  return sorted;\n}\n\nfunction signPayload(secret, timestamp, body) {\n  const crypto = require(\"crypto\");\n  return crypto.createHmac(\"sha256\", secret).update(`${timestamp}.${body}`).digest(\"hex\");\n}\n\nfunction requireSecret() {\n  const secret = $env.LENDLOOP_WEBHOOK_SECRET;\n  if (!secret) throw new Error(\"LENDLOOP_WEBHOOK_SECRET is not set\");\n  return secret;\n}\n\nconst secret = requireSecret();\nconst loan = $input.first().json;\nconst payload = {\n  loanId: loan.loanId,\n  asOf: loan.asOf,\n  idempotencyKey: loan.idempotencyKey,\n};\nconst body = canonicalJson(payload);\nconst timestamp = Date.now().toString();\nreturn [{\n  json: {\n    body,\n    timestamp,\n    signature: signPayload(secret, timestamp, body),\n    notification: loan.notification,\n  },\n}];\n"
+      },
+      "id": "22222222-2222-4222-8222-222222222226",
+      "name": "Sign reminder write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL.replace(/\\/$/, '') + '/n8n/reminders' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "22222222-2222-4222-8222-222222222227",
+      "name": "Write reminder back",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1640,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "stopWorkflow"
+    }
+  ],
+  "connections": {
+    "Daily at 09:00 UTC": {
+      "main": [
+        [
+          {
+            "node": "Sign overdue query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign overdue query": {
+      "main": [
+        [
+          {
+            "node": "Fetch overdue loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch overdue loans": {
+      "main": [
+        [
+          {
+            "node": "One item per loan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per loan": {
+      "main": [
+        [
+          {
+            "node": "Sign reminder write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign reminder write-back": {
+      "main": [
+        [
+          {
+            "node": "Write reminder back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  },
+  "pinData": {}
+}
